@@ -7,62 +7,68 @@ const cors = require("cors");
 const app = express();
 app.use(express.json());
 
-// ✅ 开发期先放开；稳定后可以改成只允许你的前端域名
+// ✅ 调试阶段先放开跨域；稳定后把 * 改成你的前端域名
 app.use(cors({ origin: "*" }));
 
-// Render 会给 PORT（日志里你看到的 10000 就是它给的）
+// ====== 配置 ======
 const PORT = process.env.PORT || 3000;
 
-// ====== 目录结构（相对 server.js 所在目录）======
-// 你的项目里应该是：
-// - server.js
-// - package.json
-// - codes.json
-// - paid/img_paid/1.jpg  2.jpg ...
+// ✅ 无水印图片目录（二选一）
+// 方案1：后端放在 paid/img_paid/1.jpg
 const PRIVATE_IMG_DIR = path.join(__dirname, "paid", "img_paid");
+
+// 方案2：后端放在 paid/1.jpg（用这个就把上面那行注释掉）
+// const PRIVATE_IMG_DIR = path.join(__dirname, "paid");
+
 const CODES_FILE = path.join(__dirname, "codes.json");
 
-// tokenMap[token] = { img, exp, used }
+// token 存内存：一次性、会过期
+// tokenMap[token] = { img: "1.jpg", exp: 1234567890, used: false }
 const tokenMap = new Map();
+const TOKEN_TTL_MS = 5 * 60 * 1000; // 5分钟
 
 // ====== 工具函数 ======
 function safeBasename(file) {
-  return path.basename(file || "");
-}
-
-function ensureCodesFile() {
-  if (!fs.existsSync(CODES_FILE)) {
-    const init = {
-      codes: [
-        { code: "CINDY-0001", used: false },
-        { code: "CINDY-0002", used: false },
-      ],
-    };
-    fs.writeFileSync(CODES_FILE, JSON.stringify(init, null, 2), "utf-8");
-  }
+  return path.basename(file || ""); // 防止 ../ 目录穿越
 }
 
 function readCodes() {
-  ensureCodesFile();
+  if (!fs.existsSync(CODES_FILE)) {
+    return { codes: [] };
+  }
   const raw = fs.readFileSync(CODES_FILE, "utf-8");
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return { codes: [] };
+  }
 }
 
 function writeCodes(data) {
   fs.writeFileSync(CODES_FILE, JSON.stringify(data, null, 2), "utf-8");
 }
 
-// ====== 根路径提示（你图二就是这个）======
+function fileExists(p) {
+  try {
+    return fs.existsSync(p);
+  } catch {
+    return false;
+  }
+}
+
+// ====== 首页提示（可选）======
 app.get("/", (req, res) => {
-  res.send("✅ Backend is running. Use /health /redeem /download");
+  res
+    .status(200)
+    .send("✅ Backend is running. Use /health /redeem /download");
 });
 
-// ====== 健康检查 ======
+// ✅ 健康检查：确认后端是否真的跑起来了
 app.get("/health", (req, res) => {
   res.json({ ok: true, msg: "server is running" });
 });
 
-// ====== 兑换码验证：成功后返回一次性 token（默认 5 分钟有效）======
+// ====== 兑换码验证：成功后发一个一次性 token ======
 app.post("/redeem", (req, res) => {
   const { code, img } = req.body || {};
 
@@ -71,17 +77,18 @@ app.post("/redeem", (req, res) => {
   }
 
   const imgName = safeBasename(img);
-  const paidImgPath = path.join(PRIVATE_IMG_DIR, imgName);
 
-  // 1) 检查图片是否存在
-  if (!fs.existsSync(paidImgPath)) {
+  // 检查无水印原图是否存在（后端目录）
+  const paidImgPath = path.join(PRIVATE_IMG_DIR, imgName);
+  if (!fileExists(paidImgPath)) {
     return res.status(404).json({
       ok: false,
-      msg: `无水印原图不存在：请确认后端路径 paid/img_paid/${imgName}`,
+      msg: `无水印原图不存在：请确认后端路径 ${path
+        .join("paid", "img_paid", imgName)
+        .replaceAll("\\", "/")}（或你改成 paid/${imgName}）`,
     });
   }
 
-  // 2) 检查兑换码
   const data = readCodes();
   const item = (data.codes || []).find((c) => c.code === code);
 
@@ -92,27 +99,28 @@ app.post("/redeem", (req, res) => {
     return res.status(401).json({ ok: false, msg: "兑换码已被使用" });
   }
 
-  // 3) 标记已使用（一码一次）
+  // 标记已使用（一码一次）
   item.used = true;
   item.usedAt = new Date().toISOString();
   writeCodes(data);
 
-  // 4) 生成一次性 token（5 分钟过期）
+  // 生成 token（5分钟过期）
   const token = crypto.randomUUID();
-  const exp = Date.now() + 5 * 60 * 1000;
+  const exp = Date.now() + TOKEN_TTL_MS;
+
   tokenMap.set(token, { img: imgName, exp, used: false });
 
   return res.json({
     ok: true,
-    msg: "兑换成功！已生成下载 token（5分钟内有效，仅一次）",
+    msg: "兑换成功！可下载无水印图（5分钟内有效，仅一次）",
     token,
   });
 });
 
-// ====== 下载无水印：必须 token + img，一次性 ======
+// ====== 下载无水印：必须带 token + img，且一次性 ======
 app.get("/download", (req, res) => {
-  const token = (req.query.token || "").toString();
-  const img = safeBasename(req.query.img || "");
+  const token = req.query.token;
+  const img = safeBasename(req.query.img);
 
   if (!token || !img) {
     return res.status(400).send("缺少 token 或 img");
@@ -122,32 +130,34 @@ app.get("/download", (req, res) => {
   if (!record) {
     return res.status(401).send("token 无效或已过期");
   }
+
   if (Date.now() > record.exp) {
     tokenMap.delete(token);
     return res.status(401).send("token 已过期");
   }
+
   if (record.used) {
     return res.status(401).send("该 token 已被使用");
   }
+
   if (record.img !== img) {
     return res.status(401).send("token 与图片不匹配");
   }
 
   const paidImgPath = path.join(PRIVATE_IMG_DIR, img);
-  if (!fs.existsSync(paidImgPath)) {
-    return res.status(404).send("文件不存在");
+  if (!fileExists(paidImgPath)) {
+    return res.status(404).send("文件不存在（后端找不到无水印图）");
   }
 
-  // 标记 token 已使用
+  // 标记 token 已使用（一次性）
   record.used = true;
   tokenMap.set(token, record);
 
-  // 触发下载
   res.download(paidImgPath, img);
 });
 
 // ====== 启动 ======
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
-  console.log(`✅ PRIVATE_IMG_DIR: ${PRIVATE_IMG_DIR}`);
+  console.log(`📁 PRIVATE_IMG_DIR = ${PRIVATE_IMG_DIR}`);
 });
