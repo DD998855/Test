@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Pastel Merge Drop</title>
+  <style>
+    :root{
+      --bg1:#cfe9ff; /* 浅蓝 */
+      --bg2:#f7d6ff; /* 浅粉紫 */
+      --bg3:#d9d6ff; /* 浅紫 */
+      --panel: rgba(255,255,255,.55);
+      --panel2: rgba(255,255,255,.35);
+      --text: #2b2b3a;
+      --accent: #ff6fb7;
+      --accent2:#7aa7ff;
+      --line:#ff5a7a;
+    }
+    html,body{ height:100%; margin:0; font-family: ui-rounded, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+    body{
+      display:flex; align-items:center; justify-content:center;
+      background: radial-gradient(1200px 900px at 20% 10%, var(--bg1), transparent 60%),
+                  radial-gradient(900px 900px at 80% 20%, var(--bg2), transparent 55%),
+                  radial-gradient(1000px 900px at 50% 90%, var(--bg3), transparent 60%),
+                  linear-gradient(135deg, #fef6ff, #f3fbff);
+      overflow:hidden;
+    }
+    .wrap{
+      width:min(520px, 96vw);
+      height:min(820px, 96vh);
+      position:relative;
+      border-radius:28px;
+      box-shadow: 0 18px 60px rgba(20, 20, 60, .18);
+      background: linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,.25));
+      backdrop-filter: blur(10px);
+      overflow:hidden;
+    }
+    #game{
+      width:100%;
+      height:100%;
+      display:block;
+    }
+    .hud{
+      position:absolute; left:14px; right:14px; top:12px;
+      display:flex; gap:10px; align-items:stretch; justify-content:space-between;
+      pointer-events:none;
+    }
+    .card{
+      pointer-events:none;
+      padding:10px 12px;
+      border-radius:18px;
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,.55);
+      box-shadow: 0 10px 30px rgba(20, 20, 60, .10);
+      color: var(--text);
+      display:flex; align-items:center; gap:10px;
+      min-width: 150px;
+    }
+    .card small{ opacity:.75; display:block; line-height:1.2; }
+    .card b{ font-size:18px; }
+    .btn{
+      pointer-events:auto;
+      user-select:none;
+      cursor:pointer;
+      padding:10px 12px;
+      border-radius:18px;
+      background: linear-gradient(135deg, rgba(255,255,255,.65), rgba(255,255,255,.35));
+      border: 1px solid rgba(255,255,255,.7);
+      box-shadow: 0 10px 30px rgba(20, 20, 60, .10);
+      color: var(--text);
+      display:flex; align-items:center; gap:8px;
+      transition: transform .12s ease;
+    }
+    .btn:active{ transform: scale(.98); }
+    .tips{
+      position:absolute; left:14px; right:14px; bottom:12px;
+      display:flex; justify-content:center;
+      pointer-events:none;
+    }
+    .tips .pill{
+      pointer-events:none;
+      padding:10px 14px;
+      border-radius:999px;
+      background: var(--panel2);
+      border: 1px solid rgba(255,255,255,.55);
+      color: rgba(43,43,58,.85);
+      font-size:12.5px;
+      box-shadow: 0 10px 30px rgba(20, 20, 60, .08);
+    }
+    .overlay{
+      position:absolute; inset:0;
+      display:none;
+      align-items:center; justify-content:center;
+      background: rgba(255,255,255,.45);
+      backdrop-filter: blur(8px);
+    }
+    .modal{
+      width:min(360px, 86%);
+      border-radius:26px;
+      background: rgba(255,255,255,.75);
+      border: 1px solid rgba(255,255,255,.8);
+      box-shadow: 0 22px 70px rgba(20,20,60,.18);
+      padding:18px 16px;
+      text-align:center;
+      color: var(--text);
+    }
+    .modal h2{ margin:6px 0 6px; font-size:20px; }
+    .modal p{ margin:6px 0 14px; opacity:.85; }
+    .modal .row{ display:flex; gap:10px; justify-content:center; }
+    .modal .row .btn{ pointer-events:auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="game"></canvas>
+
+    <div class="hud">
+      <div class="card">
+        <div>
+          <small>Score</small>
+          <b id="score">0</b>
+        </div>
+        <div style="width:1px;height:28px;background:rgba(0,0,0,.08)"></div>
+        <div>
+          <small>Best</small>
+          <b id="best">0</b>
+        </div>
+      </div>
+
+      <div class="btn" id="restartBtn" title="Restart">
+        🔄 <span style="font-weight:600">Restart</span>
+      </div>
+    </div>
+
+    <div class="tips">
+      <div class="pill">移动鼠标/手指选择落点，点击/空格投放。两个相同会合成 ✨</div>
+    </div>
+
+    <div class="overlay" id="over">
+      <div class="modal">
+        <div style="font-size:42px; line-height:1">🥺</div>
+        <h2>Game Over</h2>
+        <p>你的分数：<b id="finalScore">0</b></p>
+        <div class="row">
+          <div class="btn" id="restartBtn2">再来一局</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Matter.js -->
+  <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
+  <script>
+    (() => {
+      const {
+        Engine, Render, Runner, World, Bodies, Body, Events, Composite, Vector
+      } = Matter;
+
+      const canvas = document.getElementById('game');
+      const wrap = document.querySelector('.wrap');
+      const scoreEl = document.getElementById('score');
+      const bestEl = document.getElementById('best');
+      const overEl = document.getElementById('over');
+      const finalScoreEl = document.getElementById('finalScore');
+      const restartBtn = document.getElementById('restartBtn');
+      const restartBtn2 = document.getElementById('restartBtn2');
+
+      // ---- Size ----
+      function getSize(){
+        const r = wrap.getBoundingClientRect();
+        return { w: Math.floor(r.width), h: Math.floor(r.height) };
+      }
+      let { w: W, h: H } = getSize();
+      canvas.width = W * devicePixelRatio;
+      canvas.height = H * devicePixelRatio;
+      canvas.style.width = W + "px";
+      canvas.style.height = H + "px";
+
+      // ---- Pastel palette & "cute levels" ----
+      // 你以后可以把 emoji 换成你自己的小图标（或文字）
+      const LEVELS = [
+        { label:"🫧", color:"#bfe7ff", r:18, score: 1 },
+        { label:"🍬", color:"#ffd1ec", r:24, score: 3 },
+        { label:"🧁", color:"#dcd6ff", r:30, score: 8 },
+        { label:"🍑", color:"#ffd7c2", r:36, score: 18 },
+        { label:"🍓", color:"#ffc1d6", r:44, score: 35 },
+        { label:"🍇", color:"#d3c1ff", r:52, score: 65 },
+        { label:"🍉", color:"#b8f0d6", r:62, score: 110 },
+        { label:"🌟", color:"#fff2b8", r:74, score: 180 },
+      ];
+
+      // ---- Game state ----
+      let engine, runner, render;
+      let score = 0;
+      let best = Number(localStorage.getItem('pastel_merge_best') || 0);
+      bestEl.textContent = best;
+
+      let canDrop = true;
+      let nextLevel = 0; // 0..2 random at start
+      let pointerX = W * 0.5;
+
+      // Game over line (if any body crosses and stays)
+      let dangerY = 110; // px from top
+      let dangerTimer = 0;
+      const DANGER_DURATION = 1100; // ms
+
+      // Prevent double merges
+      const MERGE_COOLDOWN = 140; // ms
+      const recentlyMerged = new Set();
+
+      // ---- helpers: draw emoji textures on the fly ----
+      function makeTexture(levelIndex){
+        const lv = LEVELS[levelIndex];
+        const size = Math.ceil(lv.r * 2.35);
+        const c = document.createElement('canvas');
+        c.width = size; c.height = size;
+        const ctx = c.getContext('2d');
+
+        // soft glow
+        const grd = ctx.createRadialGradient(size*0.45, size*0.35, size*0.15, size*0.5, size*0.55, size*0.55);
+        grd.addColorStop(0, "rgba(255,255,255,.95)");
+        grd.addColorStop(1, lv.color);
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        ctx.arc(size/2, size/2, size*0.46, 0, Math.PI*2);
+        ctx.fill();
+
+        // inner highlight
+        ctx.fillStyle = "rgba(255,255,255,.55)";
+        ctx.beginPath();
+        ctx.arc(size*0.38, size*0.35, size*0.12, 0, Math.PI*2);
+        ctx.fill();
+
+        // stroke
+        ctx.lineWidth = Math.max(2, size*0.03);
+        ctx.strokeStyle = "rgba(255,255,255,.75)";
+        ctx.beginPath();
+        ctx.arc(size/2, size/2, size*0.46, 0, Math.PI*2);
+        ctx.stroke();
+
+        // emoji/text
+        ctx.font = `${Math.floor(size*0.46)}px ui-rounded, system-ui, Apple Color Emoji, Segoe UI Emoji`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "rgba(35,35,55,.90)";
+        ctx.fillText(lv.label, size/2, size/2 + size*0.03);
+
+        return c.toDataURL("image/png");
+      }
+
+      const textures = LEVELS.map((_, i) => makeTexture(i));
+
+      function setScore(val){
+        score = val;
+        scoreEl.textContent = score;
+        if(score > best){
+          best = score;
+          bestEl.textContent = best;
+          localStorage.setItem('pastel_merge_best', String(best));
+        }
+      }
+
+      function randStartLevel(){
+        // 初始掉落等级偏低，更好玩
+        return Math.floor(Math.random() * 3); // 0,1,2
+      }
+
+      function clamp(x, a, b){ return Math.max(a, Math.min(b, x)); }
+
+      // ---- create engine & world ----
+      function init(){
+        // clean previous if exists
+        if(render){
+          Render.stop(render);
+          Runner.stop(runner);
+          World.clear(engine.world, false);
+          Engine.clear(engine);
+          render.canvas.remove();
+        }
+
+        // recreate canvas to avoid weird hiDPI state
+        const old = document.getElementById('game');
+        const fresh = old.cloneNode(true);
+        old.parentNode.replaceChild(fresh, old);
+        canvas = fresh; // (shadowing not allowed in const; use var above? we'll do a trick)
+      }
+
+      // We'll not replace canvas node; instead keep it and rebuild renderer properly.
+      function build(){
+        overEl.style.display = "none";
+        const s = getSize();
+        W = s.w; H = s.h;
+
+        canvas.width = W * devicePixelRatio;
+        canvas.height = H * devicePixelRatio;
+        canvas.style.width = W + "px";
+        canvas.style.height = H + "px";
+
+        engine = Engine.create();
+        engine.gravity.y = 1.05;
+
+        render = Render.create({
+          canvas,
+          engine,
+          options: {
+            width: W,
+            height: H,
+            wireframes: false,
+            background: "transparent",
+            pixelRatio: devicePixelRatio
+          }
+        });
+
+        runner = Runner.create();
+
+        // bounds
+        const thickness = 60;
+        const floor = Bodies.rectangle(W/2, H + thickness/2 - 6, W + thickness*2, thickness, {
+          isStatic: true,
+          render: { fillStyle: "rgba(255,255,255,.0)" }
+        });
+        const left = Bodies.rectangle(-thickness/2, H/2, thickness, H, {
+          isStatic: true,
+          render: { fillStyle: "rgba(255,255,255,.0)" }
+        });
+        const right = Bodies.rectangle(W + thickness/2, H/2, thickness, H, {
+          isStatic: true,
+          render: { fillStyle: "rgba(255,255,255,.0)" }
+        });
+
+        // Slightly bouncy world
+        [floor,left,right].forEach(b => {
+          b.friction = 0.02;
+          b.restitution = 0.15;
+        });
+
+        World.add(engine.world, [floor, left, right]);
+
+        // custom draw: danger line + next preview
+        Events.on(render, "afterRender", () => {
+          const ctx = render.context;
+          ctx.save();
+          ctx.scale(devicePixelRatio, devicePixelRatio);
+
+          // danger line
+          ctx.beginPath();
+          ctx.moveTo(18, dangerY);
+          ctx.lineTo(W-18, dangerY);
+          ctx.setLineDash([8, 8]);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = "rgba(255, 90, 122, .55)";
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // danger indicator
+          if(dangerTimer > 0){
+            const t = clamp(dangerTimer / DANGER_DURATION, 0, 1);
+            ctx.fillStyle = `rgba(255, 90, 122, ${0.10 + 0.25*t})`;
+            ctx.fillRect(0, 0, W, dangerY);
+          }
+
+          // next preview ghost
+          const lv = LEVELS[nextLevel];
+          const x = clamp(pointerX, lv.r + 18, W - lv.r - 18);
+          const y = 64;
+          ctx.globalAlpha = 0.65;
+          const img = new Image();
+          img.src = textures[nextLevel];
+          // draw circle shadow
+          ctx.beginPath();
+          ctx.arc(x, y + lv.r + 10, lv.r * 0.9, 0, Math.PI*2);
+          ctx.fillStyle = "rgba(30,30,60,.08)";
+          ctx.fill();
+          // draw texture
+          ctx.drawImage(img, x - lv.r*1.15, y - lv.r*1.15, lv.r*2.3, lv.r*2.3);
+          ctx.globalAlpha = 1;
+
+          ctx.restore();
+        });
+
+        // collision merge
+        Events.on(engine, "collisionStart", (ev) => {
+          for (const pair of ev.pairs) {
+            const a = pair.bodyA;
+            const b = pair.bodyB;
+
+            if(!a.plugin?.mergeLevel && a.plugin?.mergeLevel !== 0) continue;
+            if(!b.plugin?.mergeLevel && b.plugin?.mergeLevel !== 0) continue;
+
+            // must be same level
+            if (a.plugin.mergeLevel !== b.plugin.mergeLevel) continue;
+
+            // do not merge if already merging
+            if (a.plugin.merging || b.plugin.merging) continue;
+
+            const idKey = a.id < b.id ? `${a.id}-${b.id}` : `${b.id}-${a.id}`;
+            if (recentlyMerged.has(idKey)) continue;
+            recentlyMerged.add(idKey);
+            setTimeout(()=>recentlyMerged.delete(idKey), MERGE_COOLDOWN);
+
+            const level = a.plugin.mergeLevel;
+            if (level >= LEVELS.length - 1) continue;
+
+            // Mark
+            a.plugin.merging = true;
+            b.plugin.merging = true;
+
+            // merge position & velocity
+            const pos = {
+              x: (a.position.x + b.position.x) / 2,
+              y: (a.position.y + b.position.y) / 2
+            };
+
+            // remove old
+            World.remove(engine.world, a);
+            World.remove(engine.world, b);
+
+            // add score
+            setScore(score + LEVELS[level].score);
+
+            // create new level body
+            const nl = level + 1;
+            const newBody = makeBall(nl, pos.x, pos.y, true);
+
+            // small pop animation: scale up then settle
+            // Matter doesn't have native scale animation; we fake with Body.scale + timeouts
+            const baseR = LEVELS[nl].r;
+            Body.setVelocity(newBody, { x: (a.velocity.x + b.velocity.x)/2, y: (a.velocity.y + b.velocity.y)/2 });
+            Body.setAngularVelocity(newBody, (a.angularVelocity + b.angularVelocity) / 2);
+
+            // pop
+            Body.scale(newBody, 1.14, 1.14);
+            setTimeout(() => {
+              if(!newBody.isSleeping){
+                Body.scale(newBody, 1/1.14, 1/1.14);
+              }
+            }, 110);
+          }
+        });
+
+        // run
+        Render.run(render);
+        Runner.run(runner, engine);
+
+        // reset state
+        setScore(0);
+        nextLevel = randStartLevel();
+        pointerX = W * 0.5;
+        dangerTimer = 0;
+        canDrop = true;
+      }
+
+      function makeBall(levelIndex, x, y, fromMerge=false){
+        const lv = LEVELS[levelIndex];
+        const ball = Bodies.circle(x, y, lv.r, {
+          restitution: 0.18,
+          friction: 0.02,
+          frictionAir: 0.010,
+          density: 0.0012,
+          render: {
+            sprite: {
+              texture: textures[levelIndex],
+              xScale: (lv.r*2.3) / 64, // will be overwritten below using setSpriteScale
+              yScale: (lv.r*2.3) / 64
+            }
+          }
+        });
+
+        // attach meta
+        ball.plugin = ball.plugin || {};
+        ball.plugin.mergeLevel = levelIndex;
+        ball.plugin.merging = false;
+
+        // accurate sprite scaling
+        setSpriteScale(ball, levelIndex);
+
+        // a tiny impulse for merged balls to feel alive
+        if(fromMerge){
+          const kick = (Math.random()*2 - 1) * 0.8;
+          Body.applyForce(ball, ball.position, { x: kick * 0.0009, y: -0.0010 });
+        }
+
+        World.add(engine.world, ball);
+        return ball;
+      }
+
+      function setSpriteScale(body, levelIndex){
+        const lv = LEVELS[levelIndex];
+        // our texture canvas size is about r*2.35; but render expects scale from actual image px.
+        // We'll compute once by loading image width lazily (safe enough).
+        const img = new Image();
+        img.src = textures[levelIndex];
+        img.onload = () => {
+          const target = lv.r * 2.3;
+          body.render.sprite.xScale = target / img.width;
+          body.render.sprite.yScale = target / img.height;
+        };
+      }
+
+      function drop(){
+        if(!canDrop) return;
+        canDrop = false;
+
+        const lv = LEVELS[nextLevel];
+        const x = clamp(pointerX, lv.r + 18, W - lv.r - 18);
+        const y = 72;
+
+        makeBall(nextLevel, x, y, false);
+
+        nextLevel = randStartLevel();
+        setTimeout(() => canDrop = true, 240);
+      }
+
+      function gameOver(){
+        overEl.style.display = "flex";
+        finalScoreEl.textContent = score;
+        canDrop = false;
+      }
+
+      function restart(){
+        // Clear world bodies except static bounds
+        overEl.style.display = "none";
+        setScore(0);
+        nextLevel = randStartLevel();
+        canDrop = true;
+        dangerTimer = 0;
+
+        const bodies = Composite.allBodies(engine.world);
+        for(const b of bodies){
+          if(!b.isStatic){
+            World.remove(engine.world, b);
+          }
+        }
+      }
+
+      // Check danger line (if any ball top passes line)
+      let lastT = performance.now();
+      Events.on(engine, "beforeUpdate", () => {
+        const now = performance.now();
+        const dt = now - lastT;
+        lastT = now;
+
+        if(overEl.style.display === "flex") return;
+
+        const bodies = Composite.allBodies(engine.world).filter(b => !b.isStatic);
+        let inDanger = false;
+
+        for(const b of bodies){
+          if(b.plugin?.mergeLevel === undefined) continue;
+          const r = b.circleRadius || 0;
+          const top = b.position.y - r;
+          if(top < dangerY){
+            inDanger = true;
+            break;
+          }
+        }
+
+        if(inDanger){
+          dangerTimer += dt;
+          if(dangerTimer >= DANGER_DURATION){
+            gameOver();
+          }
+        }else{
+          dangerTimer = Math.max(0, dangerTimer - dt*1.3);
+        }
+      });
+
+      // Input: mouse / touch
+      function setPointerFromClientX(clientX){
+        const rect = wrap.getBoundingClientRect();
+        pointerX = clientX - rect.left;
+      }
+
+      wrap.addEventListener("mousemove", (e)=> setPointerFromClientX(e.clientX));
+      wrap.addEventListener("click", (e)=>{
+        // avoid clicking the restart button area
+        if(e.target && e.target.id === "restartBtn") return;
+        if(overEl.style.display === "flex") return;
+        drop();
+      });
+
+      // Touch: drag to move, tap to drop
+      let touchMoved = false;
+      wrap.addEventListener("touchstart", (e)=>{
+        touchMoved = false;
+        if(e.touches?.[0]) setPointerFromClientX(e.touches[0].clientX);
+      }, {passive:true});
+
+      wrap.addEventListener("touchmove", (e)=>{
+        touchMoved = true;
+        if(e.touches?.[0]) setPointerFromClientX(e.touches[0].clientX);
+      }, {passive:true});
+
+      wrap.addEventListener("touchend", ()=>{
+        if(overEl.style.display === "flex") return;
+        // even if moved, allow drop when lifting (feels good on mobile)
+        drop();
+      }, {passive:true});
+
+      // Keyboard
+      window.addEventListener("keydown", (e)=>{
+        if(e.code === "Space" || e.key === " "){
+          e.preventDefault();
+          if(overEl.style.display === "flex") return;
+          drop();
+        }
+        if(e.key === "r" || e.key === "R"){
+          restart();
+        }
+      });
+
+      restartBtn.addEventListener("click", restart);
+      restartBtn2.addEventListener("click", restart);
+
+      // Resize
+      window.addEventListener("resize", ()=>{
+        const s = getSize();
+        if(Math.abs(s.w - W) < 2 && Math.abs(s.h - H) < 2) return;
+
+        // rebuild render properly on resize
+        Render.stop(render);
+        Runner.stop(runner);
+
+        // clear and rebuild
+        const oldEngine = engine;
+        const oldRender = render;
+
+        // remove events by creating new engine
+        build();
+
+        // (old canvas reused) — ok
+        if(oldRender && oldRender.textures){
+          // nothing
+        }
+        if(oldEngine){
+          // nothing
+        }
+      });
+
+      // Boot
+      build();
+    })();
+  </script>
+</body>
+</html>
