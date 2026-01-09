@@ -10,7 +10,6 @@
       --bg2:#f7d6ff; /* 浅粉紫 */
       --bg3:#d9d6ff; /* 浅紫 */
       --panel: rgba(255,255,255,.55);
-      --panel2: rgba(255,255,255,.35);
       --text: #2b2b3a;
       --line:#ff5a7a;
     }
@@ -32,6 +31,7 @@
       background: linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,.25));
       backdrop-filter: blur(10px);
       overflow:hidden;
+      touch-action: manipulation;
     }
     #game{ width:100%; height:100%; display:block; }
     .hud{
@@ -51,6 +51,10 @@
     }
     .card small{ opacity:.75; display:block; line-height:1.2; }
     .card b{ font-size:18px; }
+    .btnRow{
+      pointer-events:auto;
+      display:flex; gap:10px; align-items:center;
+    }
     .btn{
       pointer-events:auto;
       user-select:none;
@@ -63,22 +67,10 @@
       color: var(--text);
       display:flex; align-items:center; gap:8px;
       transition: transform .12s ease;
+      font-weight:600;
     }
     .btn:active{ transform: scale(.98); }
-    .tips{
-      position:absolute; left:14px; right:14px; bottom:12px;
-      display:flex; justify-content:center;
-      pointer-events:none;
-    }
-    .tips .pill{
-      padding:10px 14px;
-      border-radius:999px;
-      background: var(--panel2);
-      border: 1px solid rgba(255,255,255,.55);
-      color: rgba(43,43,58,.85);
-      font-size:12.5px;
-      box-shadow: 0 10px 30px rgba(20, 20, 60, .08);
-    }
+
     .overlay{
       position:absolute; inset:0;
       display:none;
@@ -100,6 +92,12 @@
     .modal p{ margin:6px 0 14px; opacity:.85; }
     .modal .row{ display:flex; gap:10px; justify-content:center; }
     .modal .row .btn{ pointer-events:auto; }
+
+    /* 小屏更舒服一点 */
+    @media (max-width: 420px){
+      .card{ min-width: 140px; }
+      .btn{ padding:9px 10px; border-radius:16px; }
+    }
   </style>
 </head>
 <body>
@@ -119,13 +117,10 @@
         </div>
       </div>
 
-      <div class="btn" id="restartBtn" title="Restart">
-        🔄 <span style="font-weight:600">Restart</span>
+      <div class="btnRow">
+        <div class="btn" id="muteBtn" title="Mute">🔊</div>
+        <div class="btn" id="restartBtn" title="Restart">🔄 Restart</div>
       </div>
-    </div>
-
-    <div class="tips">
-      <div class="pill">移动鼠标/手指选择落点，点击/空格投放。两个相同会合成 ✨</div>
     </div>
 
     <div class="overlay" id="over">
@@ -140,20 +135,17 @@
     </div>
   </div>
 
-  <!-- Matter.js：更稳的 CDN（unpkg） -->
+  <!-- Matter.js：稳定 CDN -->
   <script src="https://unpkg.com/matter-js@0.19.0/build/matter.min.js"></script>
 
   <script>
     (() => {
-      // ✅ 自检：如果 Matter.js 没加载成功，会直接提示你原因
       if (!window.Matter) {
         alert("Matter.js（物理引擎）没加载成功，所以无法掉落。\n\n可能原因：网络/拦截插件挡住了外链脚本。\n解决：换网络、关广告拦截，或我也可以给你离线版本。");
         return;
       }
 
-      const {
-        Engine, Render, Runner, World, Bodies, Body, Events, Composite
-      } = Matter;
+      const { Engine, Render, Runner, World, Bodies, Body, Events, Composite } = Matter;
 
       const canvas = document.getElementById('game');
       const wrap = document.querySelector('.wrap');
@@ -163,6 +155,7 @@
       const finalScoreEl = document.getElementById('finalScore');
       const restartBtn = document.getElementById('restartBtn');
       const restartBtn2 = document.getElementById('restartBtn2');
+      const muteBtn = document.getElementById('muteBtn');
 
       function getSize(){
         const r = wrap.getBoundingClientRect();
@@ -175,8 +168,8 @@
       canvas.style.width = W + "px";
       canvas.style.height = H + "px";
 
-      // 可爱等级（你之后可以把 emoji 替换成你自己的图）
-      const LEVELS = [
+      // === Pastel levels ===
+      const LEVELS_BASE = [
         { label:"🫧", color:"#bfe7ff", r:18, score: 1 },
         { label:"🍬", color:"#ffd1ec", r:24, score: 3 },
         { label:"🧁", color:"#dcd6ff", r:30, score: 8 },
@@ -186,6 +179,24 @@
         { label:"🍉", color:"#b8f0d6", r:62, score: 110 },
         { label:"🌟", color:"#fff2b8", r:74, score: 180 },
       ];
+
+      // 屏幕自适应：小屏稍微缩一丢丢，大屏稍微放一点点
+      function scaleFactor(){
+        const f = W / 430;
+        return Math.max(0.86, Math.min(1.08, f));
+      }
+
+      let LEVELS = [];
+      let textures = [];
+
+      function rebuildLevels(){
+        const s = scaleFactor();
+        LEVELS = LEVELS_BASE.map(l => ({
+          ...l,
+          r: Math.round(l.r * s)
+        }));
+        textures = LEVELS.map((_, i) => makeTexture(i));
+      }
 
       function makeTexture(levelIndex){
         const lv = LEVELS[levelIndex];
@@ -222,23 +233,134 @@
         return c.toDataURL("image/png");
       }
 
-      const textures = LEVELS.map((_, i) => makeTexture(i));
-
       function clamp(x, a, b){ return Math.max(a, Math.min(b, x)); }
       function randStartLevel(){ return Math.floor(Math.random() * 3); }
 
+      // === Audio (Web Audio) ===
+      let audioCtx = null;
+      let muted = false;
+      function ensureAudio(){
+        if(muted) return null;
+        if(!audioCtx){
+          const AC = window.AudioContext || window.webkitAudioContext;
+          audioCtx = AC ? new AC() : null;
+        }
+        if(audioCtx && audioCtx.state === "suspended"){
+          audioCtx.resume().catch(()=>{});
+        }
+        return audioCtx;
+      }
+
+      function playPop(){
+        const ctx = ensureAudio();
+        if(!ctx) return;
+        const t = ctx.currentTime;
+
+        // 低频 "啵"
+        const o1 = ctx.createOscillator();
+        const g1 = ctx.createGain();
+        o1.type = "sine";
+        o1.frequency.setValueAtTime(220, t);
+        o1.frequency.exponentialRampToValueAtTime(120, t + 0.09);
+        g1.gain.setValueAtTime(0.0001, t);
+        g1.gain.exponentialRampToValueAtTime(0.22, t + 0.01);
+        g1.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+        o1.connect(g1).connect(ctx.destination);
+        o1.start(t);
+        o1.stop(t + 0.13);
+
+        // 高频 "叮"
+        const o2 = ctx.createOscillator();
+        const g2 = ctx.createGain();
+        o2.type = "triangle";
+        o2.frequency.setValueAtTime(880, t);
+        o2.frequency.exponentialRampToValueAtTime(1200, t + 0.06);
+        g2.gain.setValueAtTime(0.0001, t);
+        g2.gain.exponentialRampToValueAtTime(0.10, t + 0.01);
+        g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.10);
+        o2.connect(g2).connect(ctx.destination);
+        o2.start(t);
+        o2.stop(t + 0.11);
+      }
+
+      muteBtn.addEventListener("click", ()=>{
+        muted = !muted;
+        muteBtn.textContent = muted ? "🔇" : "🔊";
+      });
+
+      // === Particles + Screen Shake ===
+      const particles = [];
+      let shakeTime = 0;
+      let shakeAmp = 0;
+
+      function spawnMergeFX(x, y, color){
+        // 粒子
+        const n = 22;
+        for(let i=0;i<n;i++){
+          const a = Math.random() * Math.PI * 2;
+          const sp = 1.6 + Math.random() * 3.2;
+          particles.push({
+            x, y,
+            vx: Math.cos(a)*sp,
+            vy: Math.sin(a)*sp - 0.8,
+            life: 420 + Math.random()*260,
+            age: 0,
+            r: 2 + Math.random()*3.5,
+            color
+          });
+        }
+        // 轻微震动
+        shakeTime = 140;
+        shakeAmp = 7;
+      }
+
+      function updateParticles(dt){
+        for(let i=particles.length-1; i>=0; i--){
+          const p = particles[i];
+          p.age += dt;
+          if(p.age >= p.life){
+            particles.splice(i, 1);
+            continue;
+          }
+          p.vy += 0.015 * dt; // gravity
+          p.x += p.vx * (dt/16.67);
+          p.y += p.vy * (dt/16.67);
+          p.vx *= 0.985;
+          p.vy *= 0.985;
+        }
+      }
+
+      function drawParticles(ctx){
+        for(const p of particles){
+          const t = p.age / p.life;
+          const a = 1 - t;
+          ctx.globalAlpha = Math.max(0, a);
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+          ctx.fillStyle = p.color;
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // === Game state ===
       let engine, runner, render;
       let score = 0;
       let best = Number(localStorage.getItem('pastel_merge_best') || 0);
       bestEl.textContent = best;
 
       let canDrop = true;
-      let nextLevel = randStartLevel();
+      let nextLevel = 0;
       let pointerX = W * 0.5;
 
-      let dangerY = 110;
+      // 自适应危险线：更贴近顶部（手机不会跑到中间）
+      let dangerY = 0;
+      function computeDangerY(){
+        dangerY = Math.round(Math.max(90, H * 0.18));
+      }
+
       let dangerTimer = 0;
-      const DANGER_DURATION = 1100;
+      const DANGER_DURATION = 1050;
 
       const MERGE_COOLDOWN = 140;
       const recentlyMerged = new Set();
@@ -271,9 +393,7 @@
           friction: 0.02,
           frictionAir: 0.010,
           density: 0.0012,
-          render: {
-            sprite: { texture: textures[levelIndex], xScale: 1, yScale: 1 }
-          }
+          render: { sprite: { texture: textures[levelIndex], xScale: 1, yScale: 1 } }
         });
 
         ball.plugin = ball.plugin || {};
@@ -295,14 +415,17 @@
         if(!canDrop) return;
         canDrop = false;
 
+        // 手机/浏览器：必须先交互才能发声，所以在 drop 时确保 audio 可用
+        ensureAudio();
+
         const lv = LEVELS[nextLevel];
         const x = clamp(pointerX, lv.r + 18, W - lv.r - 18);
-        const y = 72;
+        const y = Math.max(78, dangerY - 18); // 更贴近上方、好观察
 
         makeBall(nextLevel, x, y, false);
         nextLevel = randStartLevel();
 
-        setTimeout(() => canDrop = true, 240);
+        setTimeout(() => canDrop = true, 230);
       }
 
       function gameOver(){
@@ -317,18 +440,19 @@
         nextLevel = randStartLevel();
         canDrop = true;
         dangerTimer = 0;
+        particles.length = 0;
 
         const bodies = Composite.allBodies(engine.world);
         for(const b of bodies){
-          if(!b.isStatic){
-            World.remove(engine.world, b);
-          }
+          if(!b.isStatic) World.remove(engine.world, b);
         }
       }
 
       function build(){
         const s = getSize();
         W = s.w; H = s.h;
+        computeDangerY();
+        rebuildLevels();
 
         canvas.width = W * devicePixelRatio;
         canvas.height = H * devicePixelRatio;
@@ -352,21 +476,41 @@
 
         runner = Runner.create();
 
+        // ✅ 地面抬高：让堆叠更靠上、更好看
         const thickness = 60;
-        const floor = Bodies.rectangle(W/2, H + thickness/2 - 6, W + thickness*2, thickness, { isStatic: true, render:{ fillStyle:"rgba(255,255,255,0)" } });
+        const floorY = H - 26; // 抬高地面（不再堆到最底）
+        const floor = Bodies.rectangle(W/2, floorY + thickness/2, W + thickness*2, thickness, { isStatic: true, render:{ fillStyle:"rgba(255,255,255,0)" } });
         const left  = Bodies.rectangle(-thickness/2, H/2, thickness, H, { isStatic: true, render:{ fillStyle:"rgba(255,255,255,0)" } });
         const right = Bodies.rectangle(W + thickness/2, H/2, thickness, H, { isStatic: true, render:{ fillStyle:"rgba(255,255,255,0)" } });
 
         [floor,left,right].forEach(b => { b.friction=0.02; b.restitution=0.15; });
-
         World.add(engine.world, [floor, left, right]);
 
+        // 自定义绘制：危险线 + next ghost + 粒子 + 震动
+        let lastFrameT = performance.now();
         Events.on(render, "afterRender", () => {
-          const ctx = render.context;
-          ctx.save();
-          ctx.scale(devicePixelRatio, devicePixelRatio);
+          const now = performance.now();
+          const dt = now - lastFrameT;
+          lastFrameT = now;
 
-          // danger line
+          const ctx = render.context;
+
+          // === screen shake（轻微）===
+          if(shakeTime > 0){
+            shakeTime -= dt;
+            const k = Math.max(0, shakeTime / 140);
+            const amp = shakeAmp * k;
+            const ox = (Math.random()*2 - 1) * amp;
+            const oy = (Math.random()*2 - 1) * amp;
+            ctx.save();
+            ctx.translate(ox, oy);
+            ctx.restore();
+          }
+
+          // 注意：不要再手动 ctx.scale(dpr,dpr)，Render 已处理 pixelRatio
+          // 我们直接按“逻辑像素”画（Render 的 ctx 已经匹配 options.width/height 的坐标系）
+          // === danger line ===
+          ctx.save();
           ctx.beginPath();
           ctx.moveTo(18, dangerY);
           ctx.lineTo(W-18, dangerY);
@@ -379,16 +523,16 @@
           // danger tint
           if(dangerTimer > 0){
             const t = clamp(dangerTimer / DANGER_DURATION, 0, 1);
-            ctx.fillStyle = `rgba(255, 90, 122, ${0.10 + 0.25*t})`;
+            ctx.fillStyle = `rgba(255, 90, 122, ${0.08 + 0.22*t})`;
             ctx.fillRect(0, 0, W, dangerY);
           }
 
-          // next preview ghost
+          // next preview ghost（更靠近顶部）
           const lv = LEVELS[nextLevel];
           const x = clamp(pointerX, lv.r + 18, W - lv.r - 18);
-          const y = 64;
+          const y = Math.max(58, dangerY - 52);
 
-          ctx.globalAlpha = 0.65;
+          ctx.globalAlpha = 0.62;
           const img = new Image();
           img.src = textures[nextLevel];
 
@@ -400,9 +544,14 @@
           ctx.drawImage(img, x - lv.r*1.15, y - lv.r*1.15, lv.r*2.3, lv.r*2.3);
           ctx.globalAlpha = 1;
 
+          // particles
+          updateParticles(dt);
+          drawParticles(ctx);
+
           ctx.restore();
         });
 
+        // 合成逻辑
         Events.on(engine, "collisionStart", (ev) => {
           for (const pair of ev.pairs) {
             const a = pair.bodyA;
@@ -434,10 +583,15 @@
             const nl = level + 1;
             const newBody = makeBall(nl, pos.x, pos.y, true);
 
-            Body.scale(newBody, 1.14, 1.14);
+            // pop
+            Body.scale(newBody, 1.16, 1.16);
             setTimeout(() => {
-              if (!newBody.isSleeping) Body.scale(newBody, 1/1.14, 1/1.14);
-            }, 110);
+              if (!newBody.isSleeping) Body.scale(newBody, 1/1.16, 1/1.16);
+            }, 115);
+
+            // FX + Sound
+            spawnMergeFX(pos.x, pos.y, LEVELS[nl].color);
+            playPop();
           }
         });
 
@@ -464,7 +618,7 @@
             dangerTimer += dt;
             if(dangerTimer >= DANGER_DURATION) gameOver();
           }else{
-            dangerTimer = Math.max(0, dangerTimer - dt*1.3);
+            dangerTimer = Math.max(0, dangerTimer - dt*1.4);
           }
         });
 
@@ -476,22 +630,22 @@
         pointerX = W * 0.5;
         dangerTimer = 0;
         canDrop = true;
+        particles.length = 0;
       }
 
-      // pointer
       function setPointerFromClientX(clientX){
         const rect = wrap.getBoundingClientRect();
         pointerX = clientX - rect.left;
       }
 
+      // 鼠标 / 触屏输入
       wrap.addEventListener("mousemove", (e)=> setPointerFromClientX(e.clientX));
       wrap.addEventListener("click", (e)=>{
-        if (e.target && (e.target.id === "restartBtn" || e.target.closest?.("#restartBtn"))) return;
+        if (e.target && (e.target.id === "restartBtn" || e.target.closest?.("#restartBtn") || e.target.id === "muteBtn" || e.target.closest?.("#muteBtn"))) return;
         if (overEl.style.display === "flex") return;
         drop();
       });
 
-      // touch
       wrap.addEventListener("touchstart", (e)=>{
         if(e.touches?.[0]) setPointerFromClientX(e.touches[0].clientX);
       }, {passive:true});
@@ -512,22 +666,34 @@
         if(e.key === "r" || e.key === "R"){
           restart();
         }
+        if(e.key === "m" || e.key === "M"){
+          muted = !muted;
+          muteBtn.textContent = muted ? "🔇" : "🔊";
+        }
       });
 
       restartBtn.addEventListener("click", restart);
       restartBtn2.addEventListener("click", restart);
 
+      // Resize：重建（手机旋转/地址栏变化也会触发）
+      let resizeTimer = null;
       window.addEventListener("resize", ()=>{
-        const s = getSize();
-        if(Math.abs(s.w - W) < 2 && Math.abs(s.h - H) < 2) return;
-
-        Render.stop(render);
-        Runner.stop(runner);
-        World.clear(engine.world, false);
-        Engine.clear(engine);
-        build();
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(()=>{
+          const s = getSize();
+          // 停止旧的
+          if(render) Render.stop(render);
+          if(runner) Runner.stop(runner);
+          if(engine){
+            World.clear(engine.world, false);
+            Engine.clear(engine);
+          }
+          // 重新建
+          build();
+        }, 120);
       });
 
+      // Boot
       build();
     })();
   </script>
