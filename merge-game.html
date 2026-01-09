@@ -12,8 +12,6 @@
       --panel: rgba(255,255,255,.55);
       --panel2: rgba(255,255,255,.35);
       --text: #2b2b3a;
-      --accent: #ff6fb7;
-      --accent2:#7aa7ff;
       --line:#ff5a7a;
     }
     html,body{ height:100%; margin:0; font-family: ui-rounded, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
@@ -35,18 +33,13 @@
       backdrop-filter: blur(10px);
       overflow:hidden;
     }
-    #game{
-      width:100%;
-      height:100%;
-      display:block;
-    }
+    #game{ width:100%; height:100%; display:block; }
     .hud{
       position:absolute; left:14px; right:14px; top:12px;
       display:flex; gap:10px; align-items:stretch; justify-content:space-between;
       pointer-events:none;
     }
     .card{
-      pointer-events:none;
       padding:10px 12px;
       border-radius:18px;
       background: var(--panel);
@@ -78,7 +71,6 @@
       pointer-events:none;
     }
     .tips .pill{
-      pointer-events:none;
       padding:10px 14px;
       border-radius:999px;
       background: var(--panel2);
@@ -148,12 +140,19 @@
     </div>
   </div>
 
-  <!-- Matter.js -->
-  <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
+  <!-- Matter.js：更稳的 CDN（unpkg） -->
+  <script src="https://unpkg.com/matter-js@0.19.0/build/matter.min.js"></script>
+
   <script>
     (() => {
+      // ✅ 自检：如果 Matter.js 没加载成功，会直接提示你原因
+      if (!window.Matter) {
+        alert("Matter.js（物理引擎）没加载成功，所以无法掉落。\n\n可能原因：网络/拦截插件挡住了外链脚本。\n解决：换网络、关广告拦截，或我也可以给你离线版本。");
+        return;
+      }
+
       const {
-        Engine, Render, Runner, World, Bodies, Body, Events, Composite, Vector
+        Engine, Render, Runner, World, Bodies, Body, Events, Composite
       } = Matter;
 
       const canvas = document.getElementById('game');
@@ -165,19 +164,18 @@
       const restartBtn = document.getElementById('restartBtn');
       const restartBtn2 = document.getElementById('restartBtn2');
 
-      // ---- Size ----
       function getSize(){
         const r = wrap.getBoundingClientRect();
         return { w: Math.floor(r.width), h: Math.floor(r.height) };
       }
+
       let { w: W, h: H } = getSize();
       canvas.width = W * devicePixelRatio;
       canvas.height = H * devicePixelRatio;
       canvas.style.width = W + "px";
       canvas.style.height = H + "px";
 
-      // ---- Pastel palette & "cute levels" ----
-      // 你以后可以把 emoji 换成你自己的小图标（或文字）
+      // 可爱等级（你之后可以把 emoji 替换成你自己的图）
       const LEVELS = [
         { label:"🫧", color:"#bfe7ff", r:18, score: 1 },
         { label:"🍬", color:"#ffd1ec", r:24, score: 3 },
@@ -189,26 +187,6 @@
         { label:"🌟", color:"#fff2b8", r:74, score: 180 },
       ];
 
-      // ---- Game state ----
-      let engine, runner, render;
-      let score = 0;
-      let best = Number(localStorage.getItem('pastel_merge_best') || 0);
-      bestEl.textContent = best;
-
-      let canDrop = true;
-      let nextLevel = 0; // 0..2 random at start
-      let pointerX = W * 0.5;
-
-      // Game over line (if any body crosses and stays)
-      let dangerY = 110; // px from top
-      let dangerTimer = 0;
-      const DANGER_DURATION = 1100; // ms
-
-      // Prevent double merges
-      const MERGE_COOLDOWN = 140; // ms
-      const recentlyMerged = new Set();
-
-      // ---- helpers: draw emoji textures on the fly ----
       function makeTexture(levelIndex){
         const lv = LEVELS[levelIndex];
         const size = Math.ceil(lv.r * 2.35);
@@ -216,7 +194,6 @@
         c.width = size; c.height = size;
         const ctx = c.getContext('2d');
 
-        // soft glow
         const grd = ctx.createRadialGradient(size*0.45, size*0.35, size*0.15, size*0.5, size*0.55, size*0.55);
         grd.addColorStop(0, "rgba(255,255,255,.95)");
         grd.addColorStop(1, lv.color);
@@ -225,20 +202,17 @@
         ctx.arc(size/2, size/2, size*0.46, 0, Math.PI*2);
         ctx.fill();
 
-        // inner highlight
         ctx.fillStyle = "rgba(255,255,255,.55)";
         ctx.beginPath();
         ctx.arc(size*0.38, size*0.35, size*0.12, 0, Math.PI*2);
         ctx.fill();
 
-        // stroke
         ctx.lineWidth = Math.max(2, size*0.03);
         ctx.strokeStyle = "rgba(255,255,255,.75)";
         ctx.beginPath();
         ctx.arc(size/2, size/2, size*0.46, 0, Math.PI*2);
         ctx.stroke();
 
-        // emoji/text
         ctx.font = `${Math.floor(size*0.46)}px ui-rounded, system-ui, Apple Color Emoji, Segoe UI Emoji`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
@@ -250,6 +224,25 @@
 
       const textures = LEVELS.map((_, i) => makeTexture(i));
 
+      function clamp(x, a, b){ return Math.max(a, Math.min(b, x)); }
+      function randStartLevel(){ return Math.floor(Math.random() * 3); }
+
+      let engine, runner, render;
+      let score = 0;
+      let best = Number(localStorage.getItem('pastel_merge_best') || 0);
+      bestEl.textContent = best;
+
+      let canDrop = true;
+      let nextLevel = randStartLevel();
+      let pointerX = W * 0.5;
+
+      let dangerY = 110;
+      let dangerTimer = 0;
+      const DANGER_DURATION = 1100;
+
+      const MERGE_COOLDOWN = 140;
+      const recentlyMerged = new Set();
+
       function setScore(val){
         score = val;
         scoreEl.textContent = score;
@@ -260,34 +253,80 @@
         }
       }
 
-      function randStartLevel(){
-        // 初始掉落等级偏低，更好玩
-        return Math.floor(Math.random() * 3); // 0,1,2
+      function setSpriteScale(body, levelIndex){
+        const lv = LEVELS[levelIndex];
+        const img = new Image();
+        img.src = textures[levelIndex];
+        img.onload = () => {
+          const target = lv.r * 2.3;
+          body.render.sprite.xScale = target / img.width;
+          body.render.sprite.yScale = target / img.height;
+        };
       }
 
-      function clamp(x, a, b){ return Math.max(a, Math.min(b, x)); }
+      function makeBall(levelIndex, x, y, fromMerge=false){
+        const lv = LEVELS[levelIndex];
+        const ball = Bodies.circle(x, y, lv.r, {
+          restitution: 0.18,
+          friction: 0.02,
+          frictionAir: 0.010,
+          density: 0.0012,
+          render: {
+            sprite: { texture: textures[levelIndex], xScale: 1, yScale: 1 }
+          }
+        });
 
-      // ---- create engine & world ----
-      function init(){
-        // clean previous if exists
-        if(render){
-          Render.stop(render);
-          Runner.stop(runner);
-          World.clear(engine.world, false);
-          Engine.clear(engine);
-          render.canvas.remove();
+        ball.plugin = ball.plugin || {};
+        ball.plugin.mergeLevel = levelIndex;
+        ball.plugin.merging = false;
+
+        setSpriteScale(ball, levelIndex);
+
+        if(fromMerge){
+          const kick = (Math.random()*2 - 1) * 0.8;
+          Body.applyForce(ball, ball.position, { x: kick * 0.0009, y: -0.0010 });
         }
 
-        // recreate canvas to avoid weird hiDPI state
-        const old = document.getElementById('game');
-        const fresh = old.cloneNode(true);
-        old.parentNode.replaceChild(fresh, old);
-        canvas = fresh; // (shadowing not allowed in const; use var above? we'll do a trick)
+        World.add(engine.world, ball);
+        return ball;
       }
 
-      // We'll not replace canvas node; instead keep it and rebuild renderer properly.
-      function build(){
+      function drop(){
+        if(!canDrop) return;
+        canDrop = false;
+
+        const lv = LEVELS[nextLevel];
+        const x = clamp(pointerX, lv.r + 18, W - lv.r - 18);
+        const y = 72;
+
+        makeBall(nextLevel, x, y, false);
+        nextLevel = randStartLevel();
+
+        setTimeout(() => canDrop = true, 240);
+      }
+
+      function gameOver(){
+        overEl.style.display = "flex";
+        finalScoreEl.textContent = score;
+        canDrop = false;
+      }
+
+      function restart(){
         overEl.style.display = "none";
+        setScore(0);
+        nextLevel = randStartLevel();
+        canDrop = true;
+        dangerTimer = 0;
+
+        const bodies = Composite.allBodies(engine.world);
+        for(const b of bodies){
+          if(!b.isStatic){
+            World.remove(engine.world, b);
+          }
+        }
+      }
+
+      function build(){
         const s = getSize();
         W = s.w; H = s.h;
 
@@ -313,30 +352,15 @@
 
         runner = Runner.create();
 
-        // bounds
         const thickness = 60;
-        const floor = Bodies.rectangle(W/2, H + thickness/2 - 6, W + thickness*2, thickness, {
-          isStatic: true,
-          render: { fillStyle: "rgba(255,255,255,.0)" }
-        });
-        const left = Bodies.rectangle(-thickness/2, H/2, thickness, H, {
-          isStatic: true,
-          render: { fillStyle: "rgba(255,255,255,.0)" }
-        });
-        const right = Bodies.rectangle(W + thickness/2, H/2, thickness, H, {
-          isStatic: true,
-          render: { fillStyle: "rgba(255,255,255,.0)" }
-        });
+        const floor = Bodies.rectangle(W/2, H + thickness/2 - 6, W + thickness*2, thickness, { isStatic: true, render:{ fillStyle:"rgba(255,255,255,0)" } });
+        const left  = Bodies.rectangle(-thickness/2, H/2, thickness, H, { isStatic: true, render:{ fillStyle:"rgba(255,255,255,0)" } });
+        const right = Bodies.rectangle(W + thickness/2, H/2, thickness, H, { isStatic: true, render:{ fillStyle:"rgba(255,255,255,0)" } });
 
-        // Slightly bouncy world
-        [floor,left,right].forEach(b => {
-          b.friction = 0.02;
-          b.restitution = 0.15;
-        });
+        [floor,left,right].forEach(b => { b.friction=0.02; b.restitution=0.15; });
 
         World.add(engine.world, [floor, left, right]);
 
-        // custom draw: danger line + next preview
         Events.on(render, "afterRender", () => {
           const ctx = render.context;
           ctx.save();
@@ -352,7 +376,7 @@
           ctx.stroke();
           ctx.setLineDash([]);
 
-          // danger indicator
+          // danger tint
           if(dangerTimer > 0){
             const t = clamp(dangerTimer / DANGER_DURATION, 0, 1);
             ctx.fillStyle = `rgba(255, 90, 122, ${0.10 + 0.25*t})`;
@@ -363,34 +387,30 @@
           const lv = LEVELS[nextLevel];
           const x = clamp(pointerX, lv.r + 18, W - lv.r - 18);
           const y = 64;
+
           ctx.globalAlpha = 0.65;
           const img = new Image();
           img.src = textures[nextLevel];
-          // draw circle shadow
+
           ctx.beginPath();
           ctx.arc(x, y + lv.r + 10, lv.r * 0.9, 0, Math.PI*2);
           ctx.fillStyle = "rgba(30,30,60,.08)";
           ctx.fill();
-          // draw texture
+
           ctx.drawImage(img, x - lv.r*1.15, y - lv.r*1.15, lv.r*2.3, lv.r*2.3);
           ctx.globalAlpha = 1;
 
           ctx.restore();
         });
 
-        // collision merge
         Events.on(engine, "collisionStart", (ev) => {
           for (const pair of ev.pairs) {
             const a = pair.bodyA;
             const b = pair.bodyB;
 
-            if(!a.plugin?.mergeLevel && a.plugin?.mergeLevel !== 0) continue;
-            if(!b.plugin?.mergeLevel && b.plugin?.mergeLevel !== 0) continue;
-
-            // must be same level
+            if (a.plugin?.mergeLevel === undefined) continue;
+            if (b.plugin?.mergeLevel === undefined) continue;
             if (a.plugin.mergeLevel !== b.plugin.mergeLevel) continue;
-
-            // do not merge if already merging
             if (a.plugin.merging || b.plugin.merging) continue;
 
             const idKey = a.id < b.id ? `${a.id}-${b.id}` : `${b.id}-${a.id}`;
@@ -401,48 +421,56 @@
             const level = a.plugin.mergeLevel;
             if (level >= LEVELS.length - 1) continue;
 
-            // Mark
             a.plugin.merging = true;
             b.plugin.merging = true;
 
-            // merge position & velocity
-            const pos = {
-              x: (a.position.x + b.position.x) / 2,
-              y: (a.position.y + b.position.y) / 2
-            };
+            const pos = { x: (a.position.x + b.position.x) / 2, y: (a.position.y + b.position.y) / 2 };
 
-            // remove old
             World.remove(engine.world, a);
             World.remove(engine.world, b);
 
-            // add score
             setScore(score + LEVELS[level].score);
 
-            // create new level body
             const nl = level + 1;
             const newBody = makeBall(nl, pos.x, pos.y, true);
 
-            // small pop animation: scale up then settle
-            // Matter doesn't have native scale animation; we fake with Body.scale + timeouts
-            const baseR = LEVELS[nl].r;
-            Body.setVelocity(newBody, { x: (a.velocity.x + b.velocity.x)/2, y: (a.velocity.y + b.velocity.y)/2 });
-            Body.setAngularVelocity(newBody, (a.angularVelocity + b.angularVelocity) / 2);
-
-            // pop
             Body.scale(newBody, 1.14, 1.14);
             setTimeout(() => {
-              if(!newBody.isSleeping){
-                Body.scale(newBody, 1/1.14, 1/1.14);
-              }
+              if (!newBody.isSleeping) Body.scale(newBody, 1/1.14, 1/1.14);
             }, 110);
           }
         });
 
-        // run
+        // danger check
+        let lastT = performance.now();
+        Events.on(engine, "beforeUpdate", () => {
+          const now = performance.now();
+          const dt = now - lastT;
+          lastT = now;
+
+          if (overEl.style.display === "flex") return;
+
+          const bodies = Composite.allBodies(engine.world).filter(b => !b.isStatic);
+          let inDanger = false;
+
+          for(const b of bodies){
+            if(b.plugin?.mergeLevel === undefined) continue;
+            const r = b.circleRadius || 0;
+            const top = b.position.y - r;
+            if(top < dangerY){ inDanger = true; break; }
+          }
+
+          if(inDanger){
+            dangerTimer += dt;
+            if(dangerTimer >= DANGER_DURATION) gameOver();
+          }else{
+            dangerTimer = Math.max(0, dangerTimer - dt*1.3);
+          }
+        });
+
         Render.run(render);
         Runner.run(runner, engine);
 
-        // reset state
         setScore(0);
         nextLevel = randStartLevel();
         pointerX = W * 0.5;
@@ -450,122 +478,7 @@
         canDrop = true;
       }
 
-      function makeBall(levelIndex, x, y, fromMerge=false){
-        const lv = LEVELS[levelIndex];
-        const ball = Bodies.circle(x, y, lv.r, {
-          restitution: 0.18,
-          friction: 0.02,
-          frictionAir: 0.010,
-          density: 0.0012,
-          render: {
-            sprite: {
-              texture: textures[levelIndex],
-              xScale: (lv.r*2.3) / 64, // will be overwritten below using setSpriteScale
-              yScale: (lv.r*2.3) / 64
-            }
-          }
-        });
-
-        // attach meta
-        ball.plugin = ball.plugin || {};
-        ball.plugin.mergeLevel = levelIndex;
-        ball.plugin.merging = false;
-
-        // accurate sprite scaling
-        setSpriteScale(ball, levelIndex);
-
-        // a tiny impulse for merged balls to feel alive
-        if(fromMerge){
-          const kick = (Math.random()*2 - 1) * 0.8;
-          Body.applyForce(ball, ball.position, { x: kick * 0.0009, y: -0.0010 });
-        }
-
-        World.add(engine.world, ball);
-        return ball;
-      }
-
-      function setSpriteScale(body, levelIndex){
-        const lv = LEVELS[levelIndex];
-        // our texture canvas size is about r*2.35; but render expects scale from actual image px.
-        // We'll compute once by loading image width lazily (safe enough).
-        const img = new Image();
-        img.src = textures[levelIndex];
-        img.onload = () => {
-          const target = lv.r * 2.3;
-          body.render.sprite.xScale = target / img.width;
-          body.render.sprite.yScale = target / img.height;
-        };
-      }
-
-      function drop(){
-        if(!canDrop) return;
-        canDrop = false;
-
-        const lv = LEVELS[nextLevel];
-        const x = clamp(pointerX, lv.r + 18, W - lv.r - 18);
-        const y = 72;
-
-        makeBall(nextLevel, x, y, false);
-
-        nextLevel = randStartLevel();
-        setTimeout(() => canDrop = true, 240);
-      }
-
-      function gameOver(){
-        overEl.style.display = "flex";
-        finalScoreEl.textContent = score;
-        canDrop = false;
-      }
-
-      function restart(){
-        // Clear world bodies except static bounds
-        overEl.style.display = "none";
-        setScore(0);
-        nextLevel = randStartLevel();
-        canDrop = true;
-        dangerTimer = 0;
-
-        const bodies = Composite.allBodies(engine.world);
-        for(const b of bodies){
-          if(!b.isStatic){
-            World.remove(engine.world, b);
-          }
-        }
-      }
-
-      // Check danger line (if any ball top passes line)
-      let lastT = performance.now();
-      Events.on(engine, "beforeUpdate", () => {
-        const now = performance.now();
-        const dt = now - lastT;
-        lastT = now;
-
-        if(overEl.style.display === "flex") return;
-
-        const bodies = Composite.allBodies(engine.world).filter(b => !b.isStatic);
-        let inDanger = false;
-
-        for(const b of bodies){
-          if(b.plugin?.mergeLevel === undefined) continue;
-          const r = b.circleRadius || 0;
-          const top = b.position.y - r;
-          if(top < dangerY){
-            inDanger = true;
-            break;
-          }
-        }
-
-        if(inDanger){
-          dangerTimer += dt;
-          if(dangerTimer >= DANGER_DURATION){
-            gameOver();
-          }
-        }else{
-          dangerTimer = Math.max(0, dangerTimer - dt*1.3);
-        }
-      });
-
-      // Input: mouse / touch
+      // pointer
       function setPointerFromClientX(clientX){
         const rect = wrap.getBoundingClientRect();
         pointerX = clientX - rect.left;
@@ -573,35 +486,27 @@
 
       wrap.addEventListener("mousemove", (e)=> setPointerFromClientX(e.clientX));
       wrap.addEventListener("click", (e)=>{
-        // avoid clicking the restart button area
-        if(e.target && e.target.id === "restartBtn") return;
-        if(overEl.style.display === "flex") return;
+        if (e.target && (e.target.id === "restartBtn" || e.target.closest?.("#restartBtn"))) return;
+        if (overEl.style.display === "flex") return;
         drop();
       });
 
-      // Touch: drag to move, tap to drop
-      let touchMoved = false;
+      // touch
       wrap.addEventListener("touchstart", (e)=>{
-        touchMoved = false;
         if(e.touches?.[0]) setPointerFromClientX(e.touches[0].clientX);
       }, {passive:true});
-
       wrap.addEventListener("touchmove", (e)=>{
-        touchMoved = true;
         if(e.touches?.[0]) setPointerFromClientX(e.touches[0].clientX);
       }, {passive:true});
-
       wrap.addEventListener("touchend", ()=>{
-        if(overEl.style.display === "flex") return;
-        // even if moved, allow drop when lifting (feels good on mobile)
+        if (overEl.style.display === "flex") return;
         drop();
       }, {passive:true});
 
-      // Keyboard
       window.addEventListener("keydown", (e)=>{
         if(e.code === "Space" || e.key === " "){
           e.preventDefault();
-          if(overEl.style.display === "flex") return;
+          if (overEl.style.display === "flex") return;
           drop();
         }
         if(e.key === "r" || e.key === "R"){
@@ -612,32 +517,17 @@
       restartBtn.addEventListener("click", restart);
       restartBtn2.addEventListener("click", restart);
 
-      // Resize
       window.addEventListener("resize", ()=>{
         const s = getSize();
         if(Math.abs(s.w - W) < 2 && Math.abs(s.h - H) < 2) return;
 
-        // rebuild render properly on resize
         Render.stop(render);
         Runner.stop(runner);
-
-        // clear and rebuild
-        const oldEngine = engine;
-        const oldRender = render;
-
-        // remove events by creating new engine
+        World.clear(engine.world, false);
+        Engine.clear(engine);
         build();
-
-        // (old canvas reused) — ok
-        if(oldRender && oldRender.textures){
-          // nothing
-        }
-        if(oldEngine){
-          // nothing
-        }
       });
 
-      // Boot
       build();
     })();
   </script>
